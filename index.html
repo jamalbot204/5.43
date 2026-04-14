@@ -1,0 +1,279 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>JJ CHAT</title>
+  
+  <script>
+    (function() {
+      try {
+        var store = localStorage.getItem('global-ui-storage');
+        var theme = store ? JSON.parse(store).state.theme : null;
+        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.classList.remove('dark', 'studio');
+        if (theme === 'dark' || (!theme && prefersDark)) { document.documentElement.classList.add('dark'); }
+        else if (theme === 'studio') { document.documentElement.classList.add('studio'); }
+      } catch (e) {}
+    })();
+  </script>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@100;200;300;400;500;600;700&family=Inter:wght@300;400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    /* Performance Optimizations */
+    .gpu-accelerated {
+      transform: translateZ(0);
+      backface-visibility: hidden;
+      perspective: 1000px;
+    }
+
+    /* OPTIMIZATION: Isolate the message list layout calculations */
+    div[role="log"] {
+        contain: content;
+    }
+
+    /* STRICT LAYOUT CONTROL TO PREVENT SCROLL BARS FROM MERMAID ERRORS */
+    html, body {
+      height: 100%;
+      width: 100%;
+      overflow: hidden; /* Critical: Prevents layout shift/double scrollbars */
+      margin: 0;
+      padding: 0;
+      position: fixed; /* Locks the viewport */
+    }
+
+    body {
+      text-rendering: optimizeSpeed; /* Prioritize speed over geometric precision */
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      font-family: 'Plus Jakarta Sans', 'IBM Plex Sans Arabic', 'Inter', sans-serif;
+    }
+
+    /* Custom scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+
+    * { min-width: 0; min-height: 0; }
+
+    html { scrollbar-width: thin; /* For Firefox */ }
+
+    /* Markdown specific styles */
+    .markdown-content strong { font-weight: 600; color: var(--md-bold); }
+    .markdown-content em { font-style: italic; color: var(--md-italic); }
+    
+    /* Modified Link Styles for Explicit Blue */
+    .markdown-content a { color: var(--md-link); text-decoration: underline; border-bottom: none; }
+    .markdown-content a:hover { text-decoration: underline; border-bottom: none; }
+
+    /* Highlight Quoted Text */
+    .quoted-text {
+      color: var(--md-quote);
+      border-left-color: var(--md-quote);
+    }
+
+    /* Fix inline code wrapping */
+    .markdown-content code {
+      word-break: break-word;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+    }
+
+      /* This rule now includes 'div' to fix the newline rendering issue. */
+      .markdown-content p, .markdown-content li > p, .markdown-content div {
+          margin-bottom: 0.5em; margin-top: 0.5em; overflow-wrap: break-word; word-break: normal; white-space: pre-line;
+      }
+    .markdown-content blockquote {
+      border-left: 3px solid var(--md-quote);
+      padding-left: 1em; 
+      margin-left: 0; 
+      color: var(--md-quote-text);
+      font-style: italic;
+      background-color: var(--md-quote-bg);
+      border-radius: 0 8px 8px 0;
+    }
+   /* This rule adds list-style properties to fix numbered and bulleted lists. */
+    .markdown-content ul, .markdown-content ol {
+        padding-left: 1.5em; margin-top: 0.5em; margin-bottom: 0.5em; list-style-position: outside;
+    }
+    .markdown-content ul { list-style-type: disc; }
+    .markdown-content ol { list-style-type: decimal; }
+    .markdown-content li { margin-bottom: 0.25em; }
+    .markdown-content table {
+        width: auto; border-collapse: collapse; margin-top: 1em; margin-bottom: 1em; border: 1px solid #e5e7eb;
+    }
+    .dark .markdown-content table { border-color: rgba(255,255,255,0.1); }
+    .markdown-content th, .markdown-content td {
+        border: 1px solid #e5e7eb; padding: 0.5em 0.75em; text-align: left;
+    }
+    .dark .markdown-content th, .dark .markdown-content td { border-color: rgba(255,255,255,0.1); }
+    .markdown-content hr { border-top: 1px solid #e5e7eb; margin: 1em 0; }
+    .dark .markdown-content hr { border-color: rgba(255,255,255,0.1); }
+    .markdown-content h1, .markdown-content h2, .markdown-content h3 {
+        font-weight: 600; margin-top: 1em; margin-bottom: 0.5em; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.3em;
+    }
+    .dark .markdown-content h1, .dark .markdown-content h2, .dark .markdown-content h3 { border-color: rgba(255,255,255,0.1); }
+    .markdown-content h1 { font-size: 1.5em; }
+    .markdown-content h2 { font-size: 1.25em; }
+    .markdown-content h3 { font-size: 1.1em; color: var(--md-h3); }
+    
+    .highlighted-text {
+      background-color: rgba(253, 224, 71, 0.3);
+      color: #fde047;
+      padding: 0.05em 0.15em;
+      border-radius: 0.2em;
+    }
+    .hide-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    .hide-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+
+    /* Custom range slider */
+    input[type=range] {
+      -webkit-appearance: none;
+      appearance: none;
+      background: transparent;
+      cursor: pointer;
+      width: 100%;
+    }
+    input[type=range]:focus {
+      outline: none;
+    }
+    input[type=range]::-webkit-slider-runnable-track {
+      width: 100%;
+      height: 4px;
+      background: #e5e7eb;
+      border-radius: 2px;
+    }
+    .dark input[type=range]::-webkit-slider-runnable-track {
+      background: #27272a;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      height: 16px;
+      width: 16px;
+      border-radius: 50%;
+      background: #10b981;
+      margin-top: -6px;
+      transition: transform 0.2s ease;
+    }
+    input[type=range]:focus::-webkit-slider-thumb {
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.5);
+    }
+    input[type=range]:active::-webkit-slider-thumb {
+      transform: scale(1.2);
+    }
+    
+    .animate-thinking-dots > div {
+        animation: 생각_점_깜빡임 1.4s infinite ease-in-out;
+    }
+    .animate-thinking-dots > div:nth-child(1) {
+        animation-delay: -0.32s;
+    }
+    .animate-thinking-dots > div:nth-child(2) {
+        animation-delay: -0.16s;
+    }
+
+    @keyframes 생각_점_깜빡임 {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.9); }
+    }
+    @keyframes spin-slow {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .animate-spin-slow {
+      animation: spin-slow 3s linear infinite;
+    }
+    
+    /* Fix for message options menu overlap in virtualized list */
+    .virtual-item-container:has(.message-item-root.menu-open) {
+        z-index: 20 !important; /* Elevate the entire container when its child menu is open */
+    }
+
+    /* Disable interactions on fieldsets during the tap-through prevention delay */
+    fieldset:disabled {
+      pointer-events: none;
+      opacity: 0.6;
+    }
+
+    /* --- GPU Animations & Micro-Interactions --- */
+    @keyframes modalZoom {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    @keyframes slideUpFade {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Class used in BaseModal.tsx */
+    .animate-modal-open {
+      animation: modalZoom 0.2s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+    }
+
+    /* Class used in MessageItem.tsx */
+    .animate-message-enter {
+      animation: slideUpFade 0.4s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+    }
+
+    /* Global Button Press Effect - Tactile feedback */
+    button:active {
+      transform: scale(0.96);
+      transition: transform 0.1s ease-out;
+    }
+  </style>
+<link rel="stylesheet" href="/index.css">
+<script type="importmap">
+{
+  "imports": {
+    "motion/react": "https://esm.sh/motion@^12.38.0/react",
+    "vite": "https://esm.sh/vite@^7.3.0",
+    "tone": "https://esm.sh/tone@^15.1.22",
+    "@google/genai": "https://esm.sh/@google/genai@^1.34.0",
+    "jszip": "https://esm.sh/jszip@^3.10.1",
+    "react-dom": "https://esm.sh/react-dom@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "zustand/": "https://esm.sh/zustand@^5.0.9/",
+    "zustand": "https://esm.sh/zustand@^5.0.9",
+    "react-markdown": "https://esm.sh/react-markdown@^10.1.0",
+    "mermaid": "https://esm.sh/mermaid@^11.12.2",
+    "url": "https://esm.sh/url@^0.11.4",
+    "react-syntax-highlighter/": "https://esm.sh/react-syntax-highlighter@^16.1.0/",
+    "react-syntax-highlighter": "https://esm.sh/react-syntax-highlighter@^16.1.0",
+    "vite-plugin-pwa": "https://esm.sh/vite-plugin-pwa@^1.2.0",
+    "rehype-raw": "https://esm.sh/rehype-raw@^7.0.0",
+    "remark-gfm": "https://esm.sh/remark-gfm@^4.0.1",
+    "marked": "https://esm.sh/marked@^17.0.1",
+    "mark.js/": "https://esm.sh/mark.js@^8.11.1/",
+    "react-zoom-pan-pinch": "https://esm.sh/react-zoom-pan-pinch@^3.7.0",
+    "@tanstack/react-virtual": "https://esm.sh/@tanstack/react-virtual@^3.13.16"
+  }
+}
+</script>
+</head>
+<body class="bg-bg-app text-text-primary">
+  <div id="root"></div>
+  <!-- Initialize Mermaid manually to prevent auto-rendering errors on load -->
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: false });
+    window.mermaid = mermaid;
+  </script>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>

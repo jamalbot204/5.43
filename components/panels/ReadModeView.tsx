@@ -1,0 +1,442 @@
+
+import React, { useEffect, memo, useCallback, useState, Suspense, useMemo, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
+import { CloseIcon, ClipboardIcon, CheckIcon, SitemapIcon, TextAaIcon, ChevronLeftIcon, ChevronRightIcon, SpeakerWaveIcon } from '../common/Icons.tsx'; 
+import AdvancedAudioPlayer from '../audio/AdvancedAudioPlayer.tsx';
+import { useAudioStore } from '../../store/useAudioStore.ts';
+import { useActiveChatStore } from '../../store/useActiveChatStore.ts';
+import { useEditorUI } from '../../store/ui/useEditorUI.ts'; 
+import { useGlobalUiStore } from '../../store/useGlobalUiStore.ts';
+import { useStreamingStore } from '../../store/useStreamingStore.ts';
+import { useShallow } from 'zustand/react/shallow';
+import { preprocessMessageContent, parseInteractiveChoices } from '../../services/utils.ts';
+import { Button } from '../ui/Button.tsx';
+
+// Lazy load the heavy highlighter
+const CodeBlockHighlighter = React.lazy(() => import('../common/CodeBlockHighlighter.tsx'));
+
+interface ReadModeViewProps {
+  isOpen: boolean;
+  messageId: string | null;
+  onClose: () => void;
+  onGoToMessage?: () => void;
+  onPlayNext?: () => void;
+  onPlayPrevious?: () => void;
+  isStreaming?: boolean;
+}
+
+const CodeBlock: React.FC<React.PropsWithChildren<{ inline?: boolean; className?: string; node?: any }>> = memo(({
+  inline,
+  className,
+  children,
+  node
+}) => {
+  const [isCodeCopied, setIsCodeCopied] = useState(false);
+  
+  // Extract string content safely
+  const extractString = (childArray: any): string => {
+      if (typeof childArray === 'string') return childArray;
+      if (Array.isArray(childArray)) return childArray.map(extractString).join('');
+      if (React.isValidElement(childArray)) return extractString((childArray.props as any).children);
+      return String(childArray || '');
+  };
+  
+  const codeString = extractString(children).replace(/\n$/, '');
+  const match = /language-([\w.-]+)/.exec(className || '');
+  const lang = match ? match[1] : '';
+  const isMermaid = lang.toLowerCase() === 'mermaid'; 
+
+  const { openMermaidModal } = useEditorUI.getState();
+
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(codeString).then(() => {
+        setIsCodeCopied(true);
+        setTimeout(() => setIsCodeCopied(false), 2000);
+    }).catch(err => {
+        console.error('Failed to copy code: ', err);
+        alert('Failed to copy code.');
+    });
+  };
+
+  // In react-markdown v9+, inline is no longer passed. We infer it from the absence of a language match
+  // and the absence of newlines.
+  const isInline = inline !== false && !match && !codeString.includes('\n');
+
+  if (isInline) {
+    return (
+      <code className="bg-bg-element text-brand-primary rounded-md px-1.5 py-0.5 font-mono text-[0.9em] border border-border-base/50 shadow-sm">
+        {children}
+      </code>
+    );
+  }
+
+  return (
+    <div className="relative group/codeblock my-2 rounded-xl border border-border-base bg-bg-element">
+      <div className="sticky top-0 z-10 flex justify-between items-center px-4 py-1.5 bg-bg-element rounded-t-xl border-b border-border-base">
+        <span className="text-xs text-text-tertiary font-mono">{lang || 'code'}</span>
+        <div className="flex items-center space-x-2"> 
+          {isMermaid && (
+            <Button
+              variant="ghost"
+              onClick={() => openMermaidModal({ code: codeString })}
+              title="Render Diagram"
+              aria-label="Render Mermaid diagram"
+              className="p-1.5 bg-bg-element rounded-md opacity-0 group-hover/codeblock:opacity-100 focus:opacity-100 hover:bg-bg-hover"
+            >
+              <SitemapIcon className="w-4 h-4 text-brand-primary" />
+            </Button>
+          )}
+          <Button variant="ghost" onClick={handleCopyCode} title={isCodeCopied ? "Copied!" : "Copy code"} aria-label={isCodeCopied ? "Copied code to clipboard" : "Copy code to clipboard"} className="p-1.5 bg-bg-element rounded-md opacity-0 group-hover/codeblock:opacity-100 focus:opacity-100 hover:bg-bg-hover">
+              {isCodeCopied ? <CheckIcon className="w-4 h-4 text-brand-primary" /> : <ClipboardIcon className="w-4 h-4" />}
+          </Button>
+        </div>
+      </div>
+      <div className="overflow-hidden rounded-b-xl">
+        {lang ? (
+            <Suspense fallback={<div className="p-4 text-xs text-text-tertiary font-mono">Loading code...</div>}>
+                <CodeBlockHighlighter language={lang} codeString={codeString} />
+            </Suspense>
+        ) : (
+            <pre className="bg-transparent text-text-primary p-4 text-sm font-mono whitespace-pre-wrap break-words m-0">
+            <code>{codeString}</code>
+            </pre>
+        )}
+      </div>
+    </div>
+  );
+});
+
+// --- CUSTOM TEXT PROCESSOR ---
+// This function recursively traverses the React Node tree generated by ReactMarkdown.
+// It finds string nodes and applies the Gold Quote formatting.
+// This replaces the old method of injecting <span class="quoted-text"> HTML strings.
+const processNodeContent = (nodes: React.ReactNode): React.ReactNode => {
+    return React.Children.map(nodes, node => {
+        if (typeof node === 'string') {
+            // Regex matches text inside double quotes.
+            // ("[^"\n]+") matches: quote, followed by non-quote/non-newline chars, followed by quote.
+            const parts = node.split(/("[^"\n]+")/g);
+            
+            return parts.map((part, i) => {
+                if (part.startsWith('"') && part.endsWith('"') && part.length >= 2) {
+                    return <span key={i} className="quoted-text">{part}</span>;
+                }
+                return part;
+            });
+        }
+        
+        if (React.isValidElement(node)) {
+            // Skip processing children of code blocks to avoid formatting quotes inside code
+            const hastNode = (node.props as any)?.node;
+            if (hastNode && hastNode.tagName === 'code') {
+                return node;
+            }
+
+            if ((node.props as any).children) {
+                // Recursively process children of elements (like strong, em, etc.)
+                // We clone the element to preserve its type and other props, but replace children.
+                return React.cloneElement(node, {
+                    children: processNodeContent((node.props as any).children)
+                } as any);
+            }
+        }
+        
+        return node;
+    });
+};
+
+const ReadModeView: React.FC<ReadModeViewProps> = memo(({ 
+    isOpen, 
+    messageId, 
+    onClose, 
+    onGoToMessage,
+    onPlayNext, 
+    onPlayPrevious, 
+    isStreaming
+}) => {
+  const { messages } = useActiveChatStore(useShallow(state => ({
+      messages: state.currentChatSession?.messages || []
+  })));
+  const { readModeFontSizeLevel, setReadModeFontSizeLevel } = useGlobalUiStore();
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const { 
+      handleClosePlayerViewOnly, 
+      seekRelative, 
+      seekToAbsolute, 
+      togglePlayPause, 
+      increaseSpeed, 
+      decreaseSpeed 
+  } = useAudioStore(useShallow(state => ({
+      handleClosePlayerViewOnly: state.handleClosePlayerViewOnly,
+      seekRelative: state.seekRelative,
+      seekToAbsolute: state.seekToAbsolute,
+      togglePlayPause: state.togglePlayPause,
+      increaseSpeed: state.increaseSpeed,
+      decreaseSpeed: state.decreaseSpeed
+  })));
+
+  const { audioId, audioText, audioIsLoading, audioIsPlaying } = useAudioStore(useShallow(state => ({
+      audioId: state.audioPlayerState.currentMessageId,
+      audioText: state.audioPlayerState.currentPlayingText,
+      audioIsLoading: state.audioPlayerState.isLoading,
+      audioIsPlaying: state.audioPlayerState.isPlaying
+  })));
+
+  // --- Read Mode Navigation Logic ---
+  
+  // Filter for AI/Model messages only
+  const navigableMessages = useMemo(() => {
+      return messages.filter(m => m.role === 'model' && m.content.trim().length > 0);
+  }, [messages]);
+
+  const [internalMessageId, setInternalMessageId] = useState<string | null>(messageId);
+
+  useEffect(() => {
+      setInternalMessageId(messageId);
+  }, [messageId]);
+
+  const currentNavIndex = useMemo(() => {
+      if (!internalMessageId) return -1;
+      return navigableMessages.findIndex(m => m.id === internalMessageId);
+  }, [internalMessageId, navigableMessages]);
+
+  const canNavigateNext = currentNavIndex !== -1 && currentNavIndex < navigableMessages.length - 1;
+  const canNavigatePrev = currentNavIndex > 0;
+
+  const handleReadModeNext = useCallback(() => {
+      if (canNavigateNext) {
+          const nextMsg = navigableMessages[currentNavIndex + 1];
+          setInternalMessageId(nextMsg.id);
+      }
+  }, [canNavigateNext, currentNavIndex, navigableMessages]);
+
+  const handleReadModePrev = useCallback(() => {
+      if (canNavigatePrev) {
+          const prevMsg = navigableMessages[currentNavIndex - 1];
+          setInternalMessageId(prevMsg.id);
+      }
+  }, [canNavigatePrev, currentNavIndex, navigableMessages]);
+
+  const { isStreamingHere, streamingText } = useStreamingStore(useShallow(state => ({
+      isStreamingHere: state.isStreaming && state.streamingMessageId === internalMessageId,
+      streamingText: (state.isStreaming && state.streamingMessageId === internalMessageId) ? state.streamingText : null
+  })));
+
+  // Derive content dynamically
+  const readModeContent = useMemo(() => {
+      if (isStreamingHere && streamingText !== null) {
+          const { cleanContent } = parseInteractiveChoices(streamingText);
+          return cleanContent;
+      }
+
+      if (!internalMessageId) return '';
+      const msg = messages.find(m => m.id === internalMessageId);
+      if (!msg) return '';
+      
+      // Clean content (remove interactive choices syntax for pure reading)
+      const { cleanContent } = parseInteractiveChoices(msg.content);
+      return cleanContent;
+  }, [internalMessageId, messages, isStreamingHere, streamingText]);
+
+  const handlePlayReadModeMessage = useCallback(() => {
+      if (internalMessageId) {
+          const message = useActiveChatStore.getState().currentChatSession?.messages.find(m => m.id === internalMessageId);
+          if (message) {
+              useAudioStore.getState().handlePlayTextForMessage(message.content, message.id, 0);
+          }
+      }
+  }, [internalMessageId]);
+
+  // Preprocess content to support Section Headers
+  const processedContent = useMemo(() => {
+      return preprocessMessageContent(readModeContent);
+  }, [readModeContent]);
+
+  // Reset scroll on content change
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTop = 0;
+    }
+  }, [readModeContent]);
+
+  const handleGoToMessageFromReadMode = useCallback(() => {
+    if (onGoToMessage) {
+      onClose(); 
+      setTimeout(() => onGoToMessage(), 100); 
+    }
+  }, [onGoToMessage, onClose]);
+
+  const cycleFontSize = useCallback(() => {
+      // Cycles: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 0 -> 1 ...
+      const nextLevel = (readModeFontSizeLevel + 1) > 6 ? 0 : readModeFontSizeLevel + 1;
+      setReadModeFontSizeLevel(nextLevel);
+  }, [readModeFontSizeLevel, setReadModeFontSizeLevel]);
+
+  const getFontSizeClass = (level: number) => {
+      switch (level) {
+          case 0: return 'text-xs';
+          case 1: return 'text-sm';
+          case 2: return 'text-base';
+          case 3: return 'text-lg';
+          case 4: return 'text-xl';
+          case 5: return 'text-2xl';
+          case 6: return 'text-3xl';
+          default: return 'text-base';
+      }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      } else if (event.key === 'ArrowRight' && canNavigateNext && handleReadModeNext) {
+          handleReadModeNext();
+      } else if (event.key === 'ArrowLeft' && canNavigatePrev && handleReadModePrev) {
+          handleReadModePrev();
+      }
+    };
+
+    if (isOpen) {
+      document.body.style.overflow = 'hidden'; 
+      window.addEventListener('keydown', handleKeyDown);
+    } else {
+      document.body.style.overflow = 'auto';
+    }
+
+    return () => {
+      document.body.style.overflow = 'auto';
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose, canNavigateNext, handleReadModeNext, canNavigatePrev, handleReadModePrev]);
+
+  if (!isOpen) {
+    return null;
+  }
+
+  const isAudioBarVisible = !!(audioId || audioIsLoading || audioIsPlaying || audioText) && !isStreaming;
+
+  return (
+    <div
+      className="fixed inset-0 bg-bg-overlay/60 backdrop-blur-md z-40 flex flex-col p-2 pt-0.5 sm:p-8 md:p-12 transition-colors duration-300"
+      onClick={onClose} 
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="flex justify-end items-center space-x-1 sm:space-x-3 w-full mb-[1px] pt-0 flex-shrink-0">
+          {/* Navigation Controls - Forced LTR to maintain visual order of arrows */}
+          {handleReadModePrev && handleReadModeNext && (
+              <div className="flex items-center bg-bg-element rounded-full p-0.5 sm:p-1 mr-1 sm:mr-2 border border-border-base" dir="ltr">
+                  <Button
+                      variant="ghost"
+                      onClick={(e) => { e.stopPropagation(); handleReadModePrev(); }}
+                      disabled={!canNavigatePrev}
+                      className="p-1 sm:p-1.5 rounded-full"
+                      title="Previous Message (Left Arrow)"
+                  >
+                      <ChevronLeftIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </Button>
+                  <div className="w-px h-3 sm:h-4 bg-border-base mx-0.5 sm:mx-1"></div>
+                  <Button
+                      variant="ghost"
+                      onClick={(e) => { e.stopPropagation(); handleReadModeNext(); }}
+                      disabled={!canNavigateNext}
+                      className="p-1 sm:p-1.5 rounded-full"
+                      title="Next Message (Right Arrow)"
+                  >
+                      <ChevronRightIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </Button>
+              </div>
+          )}
+
+          <Button
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              cycleFontSize();
+            }}
+            className="p-1.5 sm:p-2 rounded-full"
+            title="Change Text Size"
+            aria-label="Change Text Size"
+          >
+            <TextAaIcon className="w-5 h-5 sm:w-6 sm:h-6" />
+          </Button>
+
+          {handlePlayReadModeMessage && (
+            <Button
+                variant="ghost"
+                onClick={(e) => {
+                e.stopPropagation();
+                handlePlayReadModeMessage();
+                }}
+                className="p-1.5 sm:p-2 rounded-full"
+                title="Play Audio"
+                aria-label="Play Audio"
+            >
+                <SpeakerWaveIcon className="w-5 h-5 sm:w-6 sm:h-6" />
+            </Button>
+          )}
+          
+          <Button
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation(); 
+              onClose();
+            }}
+            className="p-1.5 sm:p-2 rounded-full"
+            aria-label="Close Read Mode"
+          >
+            <CloseIcon className="w-6 h-6 sm:w-7 sm:h-7" />
+          </Button>
+      </div>
+
+      {isAudioBarVisible && (
+        <div 
+            className="flex-shrink-0 w-full mx-auto mb-[1px] rounded-t-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()} 
+        >
+          <AdvancedAudioPlayer
+            onCloseView={handleClosePlayerViewOnly}
+            onSeekRelative={seekRelative}
+            onSeekToAbsolute={seekToAbsolute}
+            onTogglePlayPause={togglePlayPause}
+            onGoToMessage={handleGoToMessageFromReadMode}
+            onIncreaseSpeed={increaseSpeed}
+            onDecreaseSpeed={decreaseSpeed}
+            onPlayNext={onPlayNext}
+            onPlayPrevious={onPlayPrevious}
+          />
+        </div>
+      )}
+
+      <div
+        ref={scrollContainerRef}
+        className="flex-grow w-full mx-auto overflow-y-auto hide-scrollbar"
+        onClick={(e) => e.stopPropagation()} 
+      >
+        <div className={`bg-bubble-ai text-text-primary border border-border-base p-4 sm:p-6 md:p-8 ${isAudioBarVisible ? 'rounded-b-xl' : 'rounded-xl'} markdown-content shadow-2xl ${getFontSizeClass(readModeFontSizeLevel)} transition duration-200 min-h-full`}>
+             <ReactMarkdown 
+                remarkPlugins={[remarkGfm]} 
+                rehypePlugins={[rehypeRaw]}
+                components={{ 
+                    code: CodeBlock, 
+                    p: ({ children, ...props }: any) => <div {...props}>{isStreaming ? children : processNodeContent(children)}</div>,
+                    li: ({ children, ...props }: any) => <li {...props}>{isStreaming ? children : processNodeContent(children)}</li>,
+                    blockquote: ({ children, ...props }: any) => <blockquote {...props}>{isStreaming ? children : processNodeContent(children)}</blockquote>,
+                    div: ({ children, ...props }: any) => <div {...props}>{isStreaming ? children : processNodeContent(children)}</div>,
+                    golden: ({ children, ...props }: any) => <span className="text-amber-500 font-bold" {...props}>{children}</span>,
+                    mode: ({ children, ...props }: any) => <span className="ai-mode-tag text-text-muted italic" {...props}>{children}</span>,
+                    a: (props: any) => <a target="_blank" rel="noopener noreferrer" {...props} />
+                } as any}
+             >
+                {processedContent}
+            </ReactMarkdown>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+export default ReadModeView;
